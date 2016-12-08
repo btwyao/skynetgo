@@ -3,19 +3,17 @@ local skynet = require "skynet"
 require "skynet.manager"	-- import manager apis
 
 local M = {
+    PTYPE_TELL = 100,
+    PTYPE_ASK = 101,
 }
 
 local worker = nil
 local call_session = nil
+local call_out_session = nil
 local wait_news = false
 
-local function yield_call(session)
-    call_session = session
-	return coroutine.yield()
-end
-
-local function yield_tcall(session, time_session)
-    call_session = {session, time_session}
+local function yield_call(session, time_session)
+    call_session, call_out_session = session, time_session
 	return coroutine.yield()
 end
 
@@ -32,15 +30,11 @@ local function register_proto(p)
 end
 
 local function resume_call(session, source, msg, sz)
-    local session_type = type(call_session)
-    if session_type == "number" and session == call_session then
-        call_session = nil
+    if call_session and session == call_session then
+        call_session, call_out_session = nil
         worker(true, msg, sz)
-    elseif session_type == "table" and session == call_session[1] then
-        call_session = nil
-        worker(true, msg, sz)
-    elseif session_type == "table" and session == call_session[2] then
-        call_session = nil
+    elseif call_out_session and session == call_out_session then
+        call_session, call_out_session = nil
         worker(false)
     end
 end
@@ -63,15 +57,43 @@ local function push_news(session, source, msg, sz, prototype)
     end
 end
 
+local function lua_dispatch(session, source, msg, sz)
+    push_news(session, source, msg, sz, skynet.PTYPE_LUA)
+end
+
 register_proto {
     name = "lua",
     id = skynet.PTYPE_LUA,
     pack = c.pack,
     unpack = c.unpack,
-    dispatch = push_news,
+    dispatch = lua_dispatch,
 }
 
-local function error_handler(session, source, msg, sz)
+local function tell_dispatch(session, source, msg, sz)
+    push_news(session, source, msg, sz, M.PTYPE_TELL)
+end
+
+register_proto {
+    name = "tell",
+    id = M.PTYPE_TELL,
+    pack = c.pack,
+    unpack = c.unpack,
+    dispatch = tell_dispatch,
+}
+
+local function ask_dispatch(session, source, msg, sz)
+    push_news(session, source, msg, sz, M.PTYPE_ASK)
+end
+
+register_proto {
+    name = "ask",
+    id = M.PTYPE_ASK,
+    pack = c.pack,
+    unpack = c.unpack,
+    dispatch = ask_dispatch,
+}
+
+local function error_dispatch(session, source, msg, sz)
     local session_type = type(call_session)
     if session_type == "number" and session == call_session then
         call_session = nil
@@ -85,7 +107,7 @@ end
 register_proto {
     name = "error",
     id = skynet.PTYPE_ERROR,
-    dispatch = error_handler,
+    dispatch = error_dispatch,
 }
 
 local function raw_dispatch_message(prototype, msg, sz, session, source)
@@ -125,32 +147,30 @@ function M.send(addr, typename, ...)
 	c.send(addr, p.id, 0, p.pack(...))
 end
 
-function M.call(addr, typename, ...)
-	local p = proto[typename]
-	local session = c.send(addr, p.id, nil, p.pack(...))
-	if session == nil then
-        return
-	end
-
-	local succ, msg, sz = yield_call(session)
-    if succ then
-	    return true, p.unpack(msg,sz)
-    end
-end
-
-function M.tcall(ti, addr, typename, ...)
-	local p = proto[typename]
+function M.call(ti, addr, typename, ...)
+    local p = proto[typename]
 	local session = c.send(addr, p.id , nil , p.pack(...))
 	if session == nil then
         return
 	end
 
-	local time_session = c.intcommand("TIMEOUT",ti)
-	assert(time_session)
-    local succ, msg, sz = yield_tcall(session, time_session)
-    if succ then
-	    return true, p.unpack(msg,sz)
+    local time_session
+    if ti and ti > 0 then
+        time_session = c.intcommand("TIMEOUT",ti)
+        assert(time_session)
     end
+    local succ, msg, sz = yield_call(session, time_session)
+    if succ then
+        return true, p.unpack(msg,sz)
+    end
+end
+
+function M.tell(ti, addr, ...)
+    return M.call(ti, addr, "tell", ...)
+end
+
+function M.ask(ti, addr, ...)
+    return M.call(ti, addr, "ask", ...)
 end
 
 function M.sleep(ti)
@@ -166,8 +186,14 @@ function M.get_news()
         yield_get_news()
     end
     local news = table.remove(news_queue, 1)
+    local session, source, prototype = news.session, news.source, news.prototype
+
     if news.session ~= 0 then
-        ret_session_map[news.session] = news.source
+        if prototype ~= M.PTYPE_TELL then
+            ret_session_map[session] = source
+        else
+            c.send(source, skynet.PTYPE_RESPONSE, session, "")
+        end
     end
     return news
 end
