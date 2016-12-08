@@ -142,12 +142,7 @@ function M.start(start_func)
     end
 end
 
-function M.send(addr, typename, ...)
-	local p = proto[typename]
-	c.send(addr, p.id, 0, p.pack(...))
-end
-
-function M.call(ti, addr, typename, ...)
+local function call(ti, addr, typename, ...)
     local p = proto[typename]
 	local session = c.send(addr, p.id , nil , p.pack(...))
 	if session == nil then
@@ -166,11 +161,11 @@ function M.call(ti, addr, typename, ...)
 end
 
 function M.tell(ti, addr, ...)
-    return M.call(ti, addr, "tell", ...)
+    return call(ti, addr, "tell", ...)
 end
 
 function M.ask(ti, addr, ...)
-    return M.call(ti, addr, "ask", ...)
+    return call(ti, addr, "ask", ...)
 end
 
 function M.sleep(ti)
