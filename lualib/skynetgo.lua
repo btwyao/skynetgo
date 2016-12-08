@@ -2,7 +2,8 @@ local c = require "skynet.core"
 local skynet = require "skynet"
 require "skynet.manager"	-- import manager apis
 
-local M = {}
+local M = {
+}
 
 local worker = nil
 local call_session = nil
@@ -172,11 +173,11 @@ function M.get_news()
 end
 
 function M.ret(news, ...)
-    local session, source, prototype = news.session, news.source, news.prototype
-    if session == 0 then
+    if not ret_session_map[news.session] then
         return
     end
 
+    local session, source, prototype = news.session, news.source, news.prototype
     ret_session_map[session] = nil
 	local p = proto[prototype]
     local msg, size = p.pack(...)
