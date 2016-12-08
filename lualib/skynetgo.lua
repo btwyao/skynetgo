@@ -94,12 +94,8 @@ register_proto {
 }
 
 local function error_dispatch(session, source, msg, sz)
-    local session_type = type(call_session)
-    if session_type == "number" and session == call_session then
-        call_session = nil
-        worker(false)
-    elseif session_type == "table" and session == call_session[1] then
-        call_session = nil
+    if call_session and session == call_session then
+        call_session, call_out_session = nil
         worker(false)
     end
 end
@@ -113,7 +109,7 @@ register_proto {
 local function raw_dispatch_message(prototype, msg, sz, session, source)
     local p = proto[prototype]
     if p and p.dispatch then
-        p.dispatch(session, source, msg, sz, prototype)
+        p.dispatch(session, source, msg, sz)
     elseif session ~= 0 then
         c.send(source, skynet.PTYPE_ERROR, session, "")
     else
